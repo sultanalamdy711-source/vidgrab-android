@@ -27,3 +27,5 @@ class VideoAdapter(private val items: List<VideoItem>, private val onClick: (Vid
     }
     override fun getItemCount() = items.size
 }
+
+data class VideoItem(val title: String, val url: String, val thumbnail: String, val duration: String)
