@@ -5,7 +5,7 @@
     <application
         android:label="VidGrab"
         android:supportsRtl="true"
-        android:extractNativeLibs="true"
+        android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar">
 
         <activity
@@ -16,6 +16,7 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- يظهر التطبيق في قائمة "مشاركة" في يوتيوب وتيك توك وغيرها -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
