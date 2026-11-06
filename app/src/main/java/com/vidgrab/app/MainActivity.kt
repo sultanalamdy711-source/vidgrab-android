@@ -66,10 +66,13 @@ class MainActivity : Activity() {
                 ui { say("فشل تجهيز المحرك: ${e.message}", true); setBusy(false) }
                 return@Thread
             }
+            
             ui { say("جارٍ تحديث المحرك...") }
             try {
                 YoutubeDL.getInstance().updateYoutubeDL(applicationContext, YoutubeDL.UpdateChannel.STABLE)
-            } catch (_: Exception) { }
+            } catch (_: Exception) { 
+                // نتجاهل الخطأ ونكمل بالنسخة المدمجة
+            }
             ready = true
             ui { say("جاهز. ألصق الرابط وابدأ."); setBusy(false) }
         }.start()
@@ -131,13 +134,17 @@ class MainActivity : Activity() {
             put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/VidGrab")
         }
         val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return false
-        val stream = contentResolver.openOutputStream(uri) ?: return false
+        val stream = contentResolver.openOutputStream(uri)
+        if (stream == null) {
+            contentResolver.delete(uri, null, null)
+            return false
+        }
         stream.use { o -> f.inputStream().use { it.copyTo(o) } }
         return true
     }
 
     private fun extractUrl(text: String): String? =
-        Regex("https?://[^\\s]+").find(text)?.value
+        Regex("""https?://[^\s"'<>]+""").find(text)?.value
 
     private fun buildUi() {
         val root = LinearLayout(this).apply {
