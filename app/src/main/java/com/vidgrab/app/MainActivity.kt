@@ -2,7 +2,6 @@ package com.vidgrab.app
 
 import android.content.ContentValues
 import android.content.Intent
-import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
 import android.provider.MediaStore
@@ -15,7 +14,6 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import com.bumptech.glide.Glide
 import com.yausername.ffmpeg.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
@@ -33,7 +31,6 @@ class MainActivity : AppCompatActivity() {
     
     private var player: ExoPlayer? = null
     private var currentVideoUrl: String? = null
-    private var currentVideoTitle: String? = null
 
     @Volatile private var ready = false
     private val uiScope = CoroutineScope(Dispatchers.Main)
@@ -82,24 +79,32 @@ class MainActivity : AppCompatActivity() {
 
     private fun performSearch() {
         val query = searchInput.text.toString().trim()
-        if (query.isEmpty() || !ready) return
+        if (query.isEmpty()) return
+        if (!ready) {
+            Toast.makeText(this, "المحرك لم يجهز بعد...", Toast.LENGTH_SHORT).show()
+            return
+        }
 
         Toast.makeText(this, "جارٍ البحث...", Toast.LENGTH_SHORT).show()
         uiScope.launch(Dispatchers.IO) {
             try {
                 val req = YoutubeDLRequest("ytsearch10:$query")
                 req.addOption("--flat-playlist")
-                req.addOption("--dump-json")
+                req.addOption("--print", "%(title)s|%(url)s|%(thumbnail)s|%(duration_string)s")
+                
+                val result = YoutubeDL.getInstance().execute(req)
+                val lines = result.out.lines().filter { it.contains("|") }
                 
                 val results = mutableListOf<VideoItem>()
-                val process = YoutubeDL.getInstance().execute(req) { _, _, _ -> }
-                // ملاحظة: قراءة مخرجات yt-dlp تتطلب معالجة النص، هنا نستخدم بديلاً مبسطاً
-                // في الإنتاج، يجب قراءة سجل العملية (process.out) وتحليل JSON
+                lines.forEach { line ->
+                    val parts = line.split("|")
+                    if (parts.size >= 4) {
+                        results.add(VideoItem(parts[0], parts[1], parts[2], parts[3]))
+                    }
+                }
                 
-                // لغرض التبسيط، سنقوم بجلب النتائج عبر دالة مساعدة
-                val searchResults = fetchSearchResults(query)
                 withContext(Dispatchers.Main) {
-                    recyclerView.adapter = VideoAdapter(searchResults) { item ->
+                    recyclerView.adapter = VideoAdapter(results) { item ->
                         playVideo(item)
                     }
                 }
@@ -111,39 +116,18 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // دالة مساعدة لجلب النتائج (لأن قراءة JSON من yt-dlp معقدة قليلاً)
-    private fun fetchSearchResults(query: String): List<VideoItem> {
-        val list = mutableListOf<VideoItem>()
-        try {
-            val req = YoutubeDLRequest("ytsearch5:$query")
-            req.addOption("--flat-playlist")
-            req.addOption("--print", "%(title)s|%(url)s|%(thumbnail)s|%(duration_string)s")
-            
-            val output = YoutubeDL.getInstance().execute(req)
-            output.out.lines().forEach { line ->
-                val parts = line.split("|")
-                if (parts.size >= 3) {
-                    list.add(VideoItem(parts[0], parts[1], parts[2], if(parts.size>3) parts[3] else ""))
-                }
-            }
-        } catch (e: Exception) { e.printStackTrace() }
-        return list
-    }
-
     private fun playVideo(item: VideoItem) {
         currentVideoUrl = item.url
-        currentVideoTitle = item.title
         videoTitle.text = item.title
         playerLayout.visibility = View.VISIBLE
         
-        // تشغيل الفيديو باستخدام ExoPlayer (يحتاج رابط بث مباشر، هنا نستخدم الرابط الأصلي كتقريب)
-        // في الواقع، yt-dlp يجب أن يستخرج رابط البث المباشر أولاً
+        Toast.makeText(this, "جارٍ تشغيل الفيديو...", Toast.LENGTH_SHORT).show()
         uiScope.launch(Dispatchers.IO) {
             try {
                 val req = YoutubeDLRequest(item.url)
-                req.addOption("-f", "best[height<=480]")
+                req.addOption("-f", "best[height<=480]") // جودة متوسطة للتشغيل السريع
                 req.addOption("--get-url")
-                val directUrl = YoutubeDL.getInstance().execute(req).out.trim()
+                val directUrl = YoutubeDL.getInstance().execute(req).out.trim().lines().first()
                 
                 withContext(Dispatchers.Main) {
                     player = ExoPlayer.Builder(this@MainActivity).build().also { exo ->
@@ -185,23 +169,17 @@ class MainActivity : AppCompatActivity() {
                     req.addOption("--merge-output-format", "mp4")
                 }
                 
-                YoutubeDL.getInstance().execute(req) { p, _, _ ->
-                    // يمكن إضافة شريط تقدم هنا
-                }
+                YoutubeDL.getInstance().execute(req) { _, _, _ -> }
 
                 val out = tmp.listFiles()?.maxByOrNull { it.length() }
                 if (out != null && saveToDownloads(out)) {
                     withContext(Dispatchers.Main) {
                         Toast.makeText(this@MainActivity, "تم الحفظ في Download/VidGrab ✓", Toast.LENGTH_LONG).show()
                     }
-                } else {
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(this@MainActivity, "فشل الحفظ", Toast.LENGTH_SHORT).show()
-                    }
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, "فشل: ${e.message}", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this@MainActivity, "فشل التنزيل: ${e.message}", Toast.LENGTH_LONG).show()
                 }
             } finally {
                 tmp.deleteRecursively()
@@ -231,5 +209,3 @@ class MainActivity : AppCompatActivity() {
         uiScope.cancel()
     }
 }
-
-data class VideoItem(val title: String, val url: String, val thumbnail: String, val duration: String)
