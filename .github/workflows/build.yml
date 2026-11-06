@@ -9,22 +9,29 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: set up JDK 17
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up JDK 17
       uses: actions/setup-java@v4
       with:
         java-version: '17'
         distribution: 'temurin'
-        
-    - name: Grant execute permission for gradlew
-      run: chmod +x gradlew
-      
+
+    - name: Grant execute permission for gradlew (if exists)
+      run: |
+        if [ -f "gradlew" ]; then
+          chmod +x gradlew
+          echo "gradlew found and made executable."
+        else
+          echo "gradlew not found. Will use system gradle instead."
+        fi
+
     - name: Build Debug APK
-      run: ./gradlew assembleDebug
-      
+      run: gradle assembleDebug --stacktrace
+
     - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
-        name: VidGrab-Debug-APK
+        name: VidGrab-APK
         path: app/build/outputs/apk/debug/app-debug.apk
