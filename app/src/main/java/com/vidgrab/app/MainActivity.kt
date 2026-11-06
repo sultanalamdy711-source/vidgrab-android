@@ -49,12 +49,14 @@ class MainActivity : Activity() {
         window.decorView.layoutDirection = View.LAYOUT_DIRECTION_RTL
         buildUi()
 
+        // رابط مشارك من تطبيق آخر (يوتيوب، تيك توك، ...)
         if (intent?.action == Intent.ACTION_SEND) {
             intent.getStringExtra(Intent.EXTRA_TEXT)?.let { urlInput.setText(extractUrl(it) ?: it) }
         }
         initEngine()
     }
 
+    // ---------- المحرك ----------
     private fun initEngine() {
         say("جارٍ تجهيز المحرك...")
         setBusy(true)
@@ -66,18 +68,17 @@ class MainActivity : Activity() {
                 ui { say("فشل تجهيز المحرك: ${e.message}", true); setBusy(false) }
                 return@Thread
             }
-            
+            // تحديث yt-dlp لأن المنصات تغيّر أنظمتها كثيراً (إن فشل نكمل بالنسخة المضمّنة)
             ui { say("جارٍ تحديث المحرك...") }
             try {
                 YoutubeDL.getInstance().updateYoutubeDL(applicationContext, YoutubeDL.UpdateChannel.STABLE)
-            } catch (_: Exception) { 
-                // نتجاهل الخطأ ونكمل بالنسخة المدمجة
-            }
+            } catch (_: Exception) { }
             ready = true
             ui { say("جاهز. ألصق الرابط وابدأ."); setBusy(false) }
         }.start()
     }
 
+    // ---------- التنزيل ----------
     private fun startDownload(audio: Boolean) {
         val url = extractUrl(urlInput.text.toString())
         if (url == null) { say("ضع رابطاً صحيحاً أولاً", true); return }
@@ -146,6 +147,7 @@ class MainActivity : Activity() {
     private fun extractUrl(text: String): String? =
         Regex("""https?://[^\s"'<>]+""").find(text)?.value
 
+    // ---------- الواجهة ----------
     private fun buildUi() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
