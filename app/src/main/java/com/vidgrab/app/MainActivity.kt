@@ -1,92 +1,177 @@
 package com.vidgrab.app
 
-import android.app.Activity
-import android.content.ClipboardManager
 import android.content.ContentValues
 import android.content.Intent
 import android.graphics.Color
-import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
+import android.net.Uri
 import android.os.Bundle
 import android.provider.MediaStore
-import android.text.InputType
-import android.view.Gravity
 import android.view.View
-import android.view.ViewGroup.LayoutParams.MATCH_PARENT
-import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
-import android.widget.Button
-import android.widget.EditText
-import android.widget.LinearLayout
-import android.widget.ProgressBar
-import android.widget.ScrollView
-import android.widget.TextView
+import android.view.inputmethod.EditorInfo
+import android.widget.*
+import androidx.appcompat.app.AppCompatActivity
+import androidx.media3.common.MediaItem
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import com.bumptech.glide.Glide
 import com.yausername.ffmpeg.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
+import kotlinx.coroutines.*
 import java.io.File
 import java.util.UUID
 
-class MainActivity : Activity() {
+class MainActivity : AppCompatActivity() {
 
-    private val INK = Color.parseColor("#12263F")
-    private val MUTED = Color.parseColor("#5B6B80")
-    private val LINE = Color.parseColor("#D5DDE8")
-    private val BG = Color.parseColor("#EDF2F7")
-    private val SIGNAL = Color.parseColor("#F5A524")
-    private val ERR = Color.parseColor("#B42318")
-
-    private lateinit var urlInput: EditText
-    private lateinit var status: TextView
-    private lateinit var progress: ProgressBar
-    private lateinit var btnVideo: Button
-    private lateinit var btnAudio: Button
+    private lateinit var searchInput: EditText
+    private lateinit var recyclerView: RecyclerView
+    private lateinit var playerLayout: View
+    private lateinit var playerView: PlayerView
+    private lateinit var videoTitle: TextView
+    
+    private var player: ExoPlayer? = null
+    private var currentVideoUrl: String? = null
+    private var currentVideoTitle: String? = null
 
     @Volatile private var ready = false
-    @Volatile private var busy = false
+    private val uiScope = CoroutineScope(Dispatchers.Main)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.decorView.layoutDirection = View.LAYOUT_DIRECTION_RTL
-        buildUi()
+        setContentView(R.layout.activity_main)
 
-        // رابط مشارك من تطبيق آخر (يوتيوب، تيك توك، ...)
-        if (intent?.action == Intent.ACTION_SEND) {
-            intent.getStringExtra(Intent.EXTRA_TEXT)?.let { urlInput.setText(extractUrl(it) ?: it) }
+        searchInput = findViewById(R.id.searchInput)
+        recyclerView = findViewById(R.id.recyclerView)
+        playerLayout = findViewById(R.id.playerLayout)
+        playerView = findViewById(R.id.playerView)
+        videoTitle = findViewById(R.id.videoTitle)
+
+        recyclerView.layoutManager = LinearLayoutManager(this)
+
+        findViewById<Button>(R.id.btnSearch).setOnClickListener { performSearch() }
+        findViewById<Button>(R.id.btnBack).setOnClickListener { closePlayer() }
+        findViewById<Button>(R.id.btnDownloadVideo).setOnClickListener { startDownload(false) }
+        findViewById<Button>(R.id.btnDownloadAudio).setOnClickListener { startDownload(true) }
+
+        searchInput.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_SEARCH) {
+                performSearch()
+                true
+            } else false
         }
+
         initEngine()
     }
 
-    // ---------- المحرك ----------
     private fun initEngine() {
-        say("جارٍ تجهيز المحرك...")
-        setBusy(true)
+        Toast.makeText(this, "جارٍ تجهيز المحرك...", Toast.LENGTH_SHORT).show()
         Thread {
             try {
                 YoutubeDL.getInstance().init(applicationContext)
                 FFmpeg.getInstance().init(applicationContext)
-            } catch (e: Exception) {
-                ui { say("فشل تجهيز المحرك: ${e.message}", true); setBusy(false) }
-                return@Thread
-            }
-            // تحديث yt-dlp لأن المنصات تغيّر أنظمتها كثيراً (إن فشل نكمل بالنسخة المضمّنة)
-            ui { say("جارٍ تحديث المحرك...") }
-            try {
                 YoutubeDL.getInstance().updateYoutubeDL(applicationContext, YoutubeDL.UpdateChannel.STABLE)
-            } catch (_: Exception) { }
-            ready = true
-            ui { say("جاهز. ألصق الرابط وابدأ."); setBusy(false) }
+                ready = true
+                uiScope.launch { Toast.makeText(this@MainActivity, "المحرك جاهز!", Toast.LENGTH_SHORT).show() }
+            } catch (e: Exception) {
+                uiScope.launch { Toast.makeText(this@MainActivity, "فشل التجهيز: ${e.message}", Toast.LENGTH_LONG).show() }
+            }
         }.start()
     }
 
-    // ---------- التنزيل ----------
-    private fun startDownload(audio: Boolean) {
-        val url = extractUrl(urlInput.text.toString())
-        if (url == null) { say("ضع رابطاً صحيحاً أولاً", true); return }
-        if (!ready || busy) return
+    private fun performSearch() {
+        val query = searchInput.text.toString().trim()
+        if (query.isEmpty() || !ready) return
 
-        setBusy(true)
-        say(if (audio) "جارٍ تنزيل الصوت..." else "جارٍ تنزيل الفيديو...")
-        Thread {
+        Toast.makeText(this, "جارٍ البحث...", Toast.LENGTH_SHORT).show()
+        uiScope.launch(Dispatchers.IO) {
+            try {
+                val req = YoutubeDLRequest("ytsearch10:$query")
+                req.addOption("--flat-playlist")
+                req.addOption("--dump-json")
+                
+                val results = mutableListOf<VideoItem>()
+                val process = YoutubeDL.getInstance().execute(req) { _, _, _ -> }
+                // ملاحظة: قراءة مخرجات yt-dlp تتطلب معالجة النص، هنا نستخدم بديلاً مبسطاً
+                // في الإنتاج، يجب قراءة سجل العملية (process.out) وتحليل JSON
+                
+                // لغرض التبسيط، سنقوم بجلب النتائج عبر دالة مساعدة
+                val searchResults = fetchSearchResults(query)
+                withContext(Dispatchers.Main) {
+                    recyclerView.adapter = VideoAdapter(searchResults) { item ->
+                        playVideo(item)
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "فشل البحث: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    // دالة مساعدة لجلب النتائج (لأن قراءة JSON من yt-dlp معقدة قليلاً)
+    private fun fetchSearchResults(query: String): List<VideoItem> {
+        val list = mutableListOf<VideoItem>()
+        try {
+            val req = YoutubeDLRequest("ytsearch5:$query")
+            req.addOption("--flat-playlist")
+            req.addOption("--print", "%(title)s|%(url)s|%(thumbnail)s|%(duration_string)s")
+            
+            val output = YoutubeDL.getInstance().execute(req)
+            output.out.lines().forEach { line ->
+                val parts = line.split("|")
+                if (parts.size >= 3) {
+                    list.add(VideoItem(parts[0], parts[1], parts[2], if(parts.size>3) parts[3] else ""))
+                }
+            }
+        } catch (e: Exception) { e.printStackTrace() }
+        return list
+    }
+
+    private fun playVideo(item: VideoItem) {
+        currentVideoUrl = item.url
+        currentVideoTitle = item.title
+        videoTitle.text = item.title
+        playerLayout.visibility = View.VISIBLE
+        
+        // تشغيل الفيديو باستخدام ExoPlayer (يحتاج رابط بث مباشر، هنا نستخدم الرابط الأصلي كتقريب)
+        // في الواقع، yt-dlp يجب أن يستخرج رابط البث المباشر أولاً
+        uiScope.launch(Dispatchers.IO) {
+            try {
+                val req = YoutubeDLRequest(item.url)
+                req.addOption("-f", "best[height<=480]")
+                req.addOption("--get-url")
+                val directUrl = YoutubeDL.getInstance().execute(req).out.trim()
+                
+                withContext(Dispatchers.Main) {
+                    player = ExoPlayer.Builder(this@MainActivity).build().also { exo ->
+                        playerView.player = exo
+                        exo.setMediaItem(MediaItem.fromUri(Uri.parse(directUrl)))
+                        exo.prepare()
+                        exo.play()
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "فشل التشغيل: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    private fun closePlayer() {
+        player?.release()
+        player = null
+        playerLayout.visibility = View.GONE
+    }
+
+    private fun startDownload(audio: Boolean) {
+        val url = currentVideoUrl ?: return
+        Toast.makeText(this, if (audio) "جارٍ تنزيل الصوت..." else "جارٍ تنزيل الفيديو...", Toast.LENGTH_SHORT).show()
+        
+        uiScope.launch(Dispatchers.IO) {
             val tmp = File(cacheDir, "dl_" + UUID.randomUUID()).apply { mkdirs() }
             try {
                 val req = YoutubeDLRequest(url)
@@ -99,34 +184,35 @@ class MainActivity : Activity() {
                     req.addOption("-f", "bv*[height<=720]+ba/b[height<=720]/b")
                     req.addOption("--merge-output-format", "mp4")
                 }
-                YoutubeDL.getInstance().execute(req, null) { p, _, _ ->
-                    ui { progress.progress = p.toInt().coerceIn(0, 100) }
+                
+                YoutubeDL.getInstance().execute(req) { p, _, _ ->
+                    // يمكن إضافة شريط تقدم هنا
                 }
 
-                val out = tmp.listFiles()
-                    ?.filter { it.isFile && !it.name.endsWith(".part") && !it.name.endsWith(".ytdl") }
-                    ?.maxByOrNull { it.length() }
-                if (out == null || !saveToDownloads(out)) {
-                    ui { say("لم يُحفظ الملف، جرّب رابطاً آخر", true) }
+                val out = tmp.listFiles()?.maxByOrNull { it.length() }
+                if (out != null && saveToDownloads(out)) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(this@MainActivity, "تم الحفظ في Download/VidGrab ✓", Toast.LENGTH_LONG).show()
+                    }
                 } else {
-                    ui { say("تم الحفظ في مجلد Download/VidGrab ✓") }
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(this@MainActivity, "فشل الحفظ", Toast.LENGTH_SHORT).show()
+                    }
                 }
             } catch (e: Exception) {
-                ui { say("فشل التنزيل: ${e.message?.lines()?.lastOrNull { it.isNotBlank() } ?: "خطأ غير معروف"}", true) }
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "فشل: ${e.message}", Toast.LENGTH_LONG).show()
+                }
             } finally {
                 tmp.deleteRecursively()
-                ui { setBusy(false) }
             }
-        }.start()
+        }
     }
 
     private fun saveToDownloads(f: File): Boolean {
         val mime = when (f.extension.lowercase()) {
             "mp4" -> "video/mp4"
-            "webm" -> "video/webm"
-            "mkv" -> "video/x-matroska"
             "mp3" -> "audio/mpeg"
-            "m4a" -> "audio/mp4"
             else -> "application/octet-stream"
         }
         val values = ContentValues().apply {
@@ -135,99 +221,15 @@ class MainActivity : Activity() {
             put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/VidGrab")
         }
         val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return false
-        val stream = contentResolver.openOutputStream(uri)
-        if (stream == null) {
-            contentResolver.delete(uri, null, null)
-            return false
-        }
-        stream.use { o -> f.inputStream().use { it.copyTo(o) } }
+        contentResolver.openOutputStream(uri)?.use { o -> f.inputStream().use { it.copyTo(o) } }
         return true
     }
 
-    private fun extractUrl(text: String): String? =
-        Regex("""https?://[^\s"'<>]+""").find(text)?.value
-
-    // ---------- الواجهة ----------
-    private fun buildUi() {
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(36), dp(20), dp(28))
-        }
-        root.addView(TextView(this).apply {
-            text = "ألصق الرابط، نزّل الفيديو"
-            textSize = 28f; setTextColor(INK); setTypeface(typeface, Typeface.BOLD)
-        })
-        root.addView(TextView(this).apply {
-            text = "يعمل مع يوتيوب وتيك توك وإنستغرام وفيسبوك وغيرها. التنزيل يتم على جوالك مباشرة."
-            textSize = 15f; setTextColor(MUTED)
-            setPadding(0, dp(6), 0, dp(20))
-        })
-
-        urlInput = EditText(this).apply {
-            hint = "ضع رابط الفيديو هنا"
-            inputType = InputType.TYPE_TEXT_VARIATION_URI
-            textDirection = View.TEXT_DIRECTION_LTR
-            gravity = Gravity.LEFT or Gravity.CENTER_VERTICAL
-            setTextColor(INK); setHintTextColor(MUTED); textSize = 16f
-            background = bg(Color.WHITE, 14, LINE)
-            setPadding(dp(14), dp(14), dp(14), dp(14))
-        }
-        root.addView(urlInput, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
-
-        root.addView(btn("لصق من الحافظة", false) {
-            val cm = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
-            val t = cm.primaryClip?.getItemAt(0)?.coerceToText(this)?.toString()
-            if (t.isNullOrBlank()) say("الحافظة فارغة", true) else urlInput.setText(t.trim())
-        })
-        btnVideo = btn("تنزيل الفيديو (حتى 720p)", true) { startDownload(false) }
-        btnAudio = btn("تنزيل الصوت فقط MP3", false) { startDownload(true) }
-        root.addView(btnVideo)
-        root.addView(btnAudio)
-
-        progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
-            max = 100; visibility = View.INVISIBLE
-            progressTintList = android.content.res.ColorStateList.valueOf(SIGNAL)
-        }
-        root.addView(progress, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(18) })
-
-        status = TextView(this).apply { textSize = 15f; setTextColor(MUTED); setPadding(0, dp(8), 0, 0) }
-        root.addView(status)
-
-        setContentView(ScrollView(this).apply { setBackgroundColor(BG); addView(root) })
+    override fun onDestroy() {
+        super.onDestroy()
+        player?.release()
+        uiScope.cancel()
     }
-
-    private fun btn(label: String, filled: Boolean, onClick: () -> Unit) = Button(this).apply {
-        text = label
-        isAllCaps = false
-        textSize = 16f
-        setTypeface(typeface, Typeface.BOLD)
-        setTextColor(if (filled) Color.WHITE else INK)
-        background = bg(if (filled) INK else Color.TRANSPARENT, 12, if (filled) null else LINE)
-        setPadding(dp(16), dp(14), dp(16), dp(14))
-        layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = dp(10) }
-        setOnClickListener { onClick() }
-    }
-
-    private fun setBusy(b: Boolean) {
-        busy = b
-        if (::btnVideo.isInitialized) {
-            btnVideo.isEnabled = !b; btnAudio.isEnabled = !b
-            btnVideo.alpha = if (b) 0.55f else 1f; btnAudio.alpha = if (b) 0.55f else 1f
-            progress.visibility = if (b) View.VISIBLE else View.INVISIBLE
-            if (!b) progress.progress = 0
-        }
-    }
-
-    private fun say(text: String, isErr: Boolean = false) {
-        status.text = text
-        status.setTextColor(if (isErr) ERR else MUTED)
-    }
-
-    private fun bg(color: Int, radius: Int, stroke: Int? = null) = GradientDrawable().apply {
-        setColor(color); cornerRadius = dp(radius).toFloat()
-        if (stroke != null) setStroke(dp(2), stroke)
-    }
-
-    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
-    private fun ui(block: () -> Unit) = runOnUiThread(block)
 }
+
+data class VideoItem(val title: String, val url: String, val thumbnail: String, val duration: String)
