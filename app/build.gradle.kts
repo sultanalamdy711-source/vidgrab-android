@@ -17,13 +17,7 @@ android {
     }
 
     buildTypes {
-        getByName("debug") {
-            isMinifyEnabled = false
-        }
-        getByName("release") {
-            isMinifyEnabled = false
-            // تركنا النسخة Release بدون توقيع (إذا أردت استخدامها لاحقاً ستحتاج لملف keystore)
-        }
+        getByName("debug") { isMinifyEnabled = false }
     }
 
     compileOptions {
@@ -37,4 +31,14 @@ android {
 dependencies {
     implementation("io.github.junkfood02.youtubedl-android:library:0.17.4")
     implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.17.4")
+    
+    // مكتبات الواجهة ومشغل الفيديو
+    implementation("androidx.appcompat:appcompat:1.6.1")
+    implementation("com.google.android.material:material:1.11.0")
+    implementation("androidx.constraintlayout:constraintlayout:2.1.4")
+    implementation("androidx.recyclerview:recyclerview:1.3.2")
+    implementation("com.github.bumptech.glide:glide:4.16.0")
+    implementation("androidx.media3:media3-exoplayer:1.3.1")
+    implementation("androidx.media3:media3-ui:1.3.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 }
